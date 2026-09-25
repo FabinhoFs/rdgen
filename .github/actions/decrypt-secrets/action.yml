@@ -1,37 +1,57 @@
-name: 'Decrypt and Mask Secrets'
-description: 'Decrypts a zip and masks the JSON contents as env vars'
+name: 'Load Build Secrets'
+description: 'Reads JSON config and sets env vars'
 inputs:
   zip_password:
-    description: 'Password for the Zip'
-    required: true
-  zip_path:
-    description: 'Path to the encrypted zip'
+    description: 'Not used (kept for compatibility)'
     required: false
-    default: 'secrets.zip'
+    default: 'none'
 
 runs:
   using: "composite"
   steps:
-    - name: install python deps
-      shell: bash
-      run: |
-        pip install pyzipper
-    - name: Decrypt and Mask
+    - name: Load env vars from config
       shell: python
       run: |
-        import pyzipper
         import json
         import os
+        import glob
 
-        with pyzipper.AESZipFile('${{ inputs.zip_path }}') as zf:
-            zf.setpassword('${{ inputs.zip_password }}'.encode())
-            with zf.open('secrets.json') as f:
-                secrets = json.load(f)
+        config_dir = os.environ.get('CONFIG_DIR', '.')
+        candidates = [
+            os.path.join(config_dir, 'config', 'secrets.json'),
+            os.path.join(config_dir, 'secrets.json'),
+            'config/secrets.json',
+            'secrets.json',
+        ]
+        found = None
+        for c in candidates:
+            if os.path.isfile(c):
+                found = c
+                break
+        if not found:
+            matches = glob.glob('**/secrets.json', recursive=True)
+            if matches:
+                found = matches[0]
+
+        if not found:
+            raise FileNotFoundError("secrets.json not found in any expected location")
+
+        print(f"Loading config from: {found}")
+        with open(found, 'r') as f:
+            secrets = json.load(f)
 
         with open(os.environ['GITHUB_ENV'], 'a') as env_file:
             for key, value in secrets.items():
-                if value:
-                    print(f"::add-mask::{value}")
-                    env_file.write(f"{key}={value}\n")
-        
-        print(f"Successfully masked {len(secrets)} secrets.")
+                sv = str(value)
+                if sv:
+                    print(f"::add-mask::{sv}")
+                    env_file.write(f"{key}={sv}\n")
+
+        # Also set CONFIG_DIR for icon/logo paths
+        config_base = os.path.dirname(found)
+        env_file_path = os.environ['GITHUB_ENV']
+        with open(env_file_path, 'a') as env_file:
+            env_file.write(f"AGIS_CONFIG_DIR={config_base}\n")
+
+        print(f"Successfully loaded {len(secrets)} config values.")
+        print(f"Config dir set to: {config_base}")

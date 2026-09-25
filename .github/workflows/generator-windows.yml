@@ -9,9 +9,9 @@ on:
         default: ''
         type: string
       zip_url:
-        description: 'url to zip of json'
-        required: true
-        default: ''
+        description: 'url to zip of json (not used for self-hosted builds)'
+        required: false
+        default: '{}'
         type: string
 
 
@@ -89,21 +89,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: encrypted-secrets-zip
+          path: ${{ runner.temp }}/agis-config
 
       - name: Load Secrets
         uses: ./.github/actions/decrypt-secrets
         with:
-          zip_password: ${{ secrets.ZIP_PASSWORD }}
-
-      - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
-        continue-on-error: true
-        uses: fjogeleit/http-request-action@v1
-        with:
-          url: "${{ secrets.GENURL }}/cleanzip"
-          method: 'POST'
-          customHeaders: '{"Content-Type": "application/json"}'
-          data: '{"uuid": "${{ env.uuid }}"}'
+          zip_password: 'none'
+        env:
+          CONFIG_DIR: ${{ runner.temp }}/agis-config
 
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -389,8 +382,34 @@ jobs:
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
         shell: bash
           
-      - name: magick stuff
-        if: ${{ env.iconlink_url != 'false' }}
+      - name: magick stuff (local icon)
+        if: env.local_icon == 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $iconSrc = "${{ env.AGIS_CONFIG_DIR }}/icon.png"
+          if (-not (Test-Path $iconSrc)) {
+            $iconSrc = "${{ runner.temp }}/agis-config/config/icon.png"
+          }
+          Write-Host "Using icon from: $iconSrc"
+          Copy-Item $iconSrc ./res/iconx.png
+          mv ./res/icon.ico ./res/icon.ico.bak
+          mv ./res/icon.png ./res/icon.png.bak
+          mv ./res/tray-icon.ico ./res/tray-icon.ico.bak
+          mv ./res/iconx.png ./res/icon.png
+          mv ./res/32x32.png ./res/32x32.png.bak
+          mv ./res/64x64.png ./res/64x64.png.bak
+          mv ./res/128x128.png ./res/128x128.png.bak
+          mv ./res/128x128@2x.png ./res/128x128@2x.png.bak
+          magick ./res/icon.png -define icon:auto-resize=256,64,48,32,16 ./res/icon.ico
+          cp ./res/icon.ico ./res/tray-icon.ico
+          magick ./res/icon.png -resize 32x32 ./res/32x32.png
+          magick ./res/icon.png -resize 64x64 ./res/64x64.png
+          magick ./res/icon.png -resize 128x128 ./res/128x128.png
+          magick ./res/128x128.png -resize 200% ./res/128x128@2x.png
+
+      - name: magick stuff (remote icon)
+        if: env.iconlink_url != 'false' && env.iconlink_url != 'local' && env.local_icon != 'true'
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 5
@@ -398,7 +417,7 @@ jobs:
           retry_wait_seconds: 15
           shell: pwsh
           command: |
-            Invoke-WebRequest -Uri ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }} -OutFile ./res/iconx.png 
+            Invoke-WebRequest -Uri ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }} -OutFile ./res/iconx.png
             mv ./res/icon.ico ./res/icon.ico.bak
             mv ./res/icon.png ./res/icon.png.bak
             mv ./res/tray-icon.ico ./res/tray-icon.ico.bak
@@ -416,7 +435,7 @@ jobs:
 
 
       - name: ui.rs icon
-        if: ${{ env.iconlink_url != 'false' }}
+        if: env.local_icon == 'true' || (env.iconlink_url != 'false' && env.iconlink_url != 'local')
         continue-on-error: true
         shell: bash
         run: |
@@ -464,7 +483,7 @@ jobs:
       #           </security>' ./flutter/windows/runner/runner.exe.manifest
 
       - name: replace flutter icons
-        if: ${{ env.iconlink_url != 'false' }}
+        if: env.local_icon == 'true' || (env.iconlink_url != 'false' && env.iconlink_url != 'local')
         continue-on-error: true
         run: |
           cd ./flutter
@@ -531,14 +550,30 @@ jobs:
           }
 
       - name: icon stuff
-        if: ${{ env.iconlink_url != 'false' }}
+        if: env.local_icon == 'true' || (env.iconlink_url != 'false' && env.iconlink_url != 'local')
         continue-on-error: true
         run: |
           mv ./rustdesk/data/flutter_assets/assets/icon.svg ./rustdesk/data/flutter_assets/assets/icon.svg.bak
           magick ./res/icon.png ./rustdesk/data/flutter_assets/assets/icon.svg
 
-      - name: logo stuff
-        if: ${{ env.logolink_url != 'false' }}
+      - name: logo stuff (local)
+        if: env.local_icon == 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $logoSrc = "${{ env.AGIS_CONFIG_DIR }}/logo.png"
+          if (-not (Test-Path $logoSrc)) {
+            $logoSrc = "${{ runner.temp }}/agis-config/config/logo.png"
+          }
+          if (Test-Path $logoSrc) {
+            Write-Host "Using logo from: $logoSrc"
+            Copy-Item $logoSrc ./rustdesk/data/flutter_assets/assets/logo.png -Force
+          } else {
+            Write-Host "Warning: logo.png not found"
+          }
+
+      - name: logo stuff (remote)
+        if: env.logolink_url != 'false' && env.logolink_url != 'local' && env.local_icon != 'true'
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 5
@@ -672,29 +707,15 @@ jobs:
         run: |
           mv ./SignOutput/rustdesk.msi "./SignOutput/${{ env.filename }}.msi" || echo "rustdesk"
 
-      - name: send file to rdgen server
-        if: ${{ env.rdgen == 'true' }}
-        uses: nick-fields/retry@v3
+      - name: Upload build artifacts
+        if: env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/upload-artifact@v4
         with:
-          timeout_minutes: 5
-          max_attempts: 3
-          retry_wait_seconds: 15
-          shell: bash
-          command: |
-            curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client
-            curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.msi" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client || true
-
-      - name: send file to api server
-        if: ${{ env.rdgen == 'false' }}
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 5
-          max_attempts: 3
-          retry_wait_seconds: 15
-          shell: bash
-          command: |
-            curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" ${{ env.apiServer }}/api/save_custom_client
-            curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.msi" ${{ env.apiServer }}/api/save_custom_client || true
+          name: agisdesk-windows-${{ env.VERSION }}
+          path: |
+            ./SignOutput/${{ env.filename }}.exe
+            ./SignOutput/${{ env.filename }}.msi
+          retention-days: 30
 
   cleanup:
     needs: [build-for-windows-flutter]
