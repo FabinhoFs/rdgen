@@ -254,6 +254,49 @@ jobs:
           # ./flutter/pubspec.yaml
           #sed -i '/intl:/a \ \ archive: ^3.6.1' ./flutter/pubspec.yaml
 
+      - name: deep rebrand - fix service name, install dir, shortcuts, registry
+        if: env.appname != 'rustdesk' && env.appname != 'RustDesk'
+        continue-on-error: true
+        shell: bash
+        run: |
+          APPNAME="${{ env.appname }}"
+          APPNAME_LOWER=$(echo "$APPNAME" | tr '[:upper:]' '[:lower:]')
+          echo "=== Deep rebrand: RustDesk -> $APPNAME ==="
+
+          # 1. CRITICAL: Change APP_NAME default in hbb_common config.rs
+          # This is the master switch that controls: service name, install directory,
+          # desktop/start menu shortcuts, registry keys, config file names, named pipes,
+          # firewall rules, and most dynamic branding throughout the app.
+          sed -i 's|RwLock::new("RustDesk".to_owned())|RwLock::new("'"$APPNAME"'".to_owned())|' ./libs/hbb_common/src/config.rs
+
+          # 2. Fix hardcoded staging directory in windows.rs
+          sed -i 's|\.join("RustDesk")\.join("RustDeskCustomClientStaging")|.join("'"$APPNAME"'").join("'"$APPNAME"'CustomClientStaging")|' ./src/platform/windows.rs
+          sed -i 's|"RustDesk Output"|"'"$APPNAME"' Output"|' ./src/platform/windows.rs
+
+          # 3. Fix 2FA TOTP issuer
+          sed -i 's|const ISSUER: &str = "RustDesk"|const ISSUER: \&str = "'"$APPNAME"'"|' ./src/auth_2fa.rs
+
+          # 4. Fix Flutter tabbar hardcoded app name
+          sed -i 's|"RustDesk"|"'"$APPNAME"'"|' ./flutter/lib/desktop/widgets/tabbar_widget.dart
+
+          # 5. Fix portable packer binary identifier (must match byte length)
+          # "rustdesk" = 8 bytes, replacement must also be 8 bytes
+          if [ ${#APPNAME_LOWER} -eq 8 ]; then
+            sed -i 's|b"rustdesk"|b"'"$APPNAME_LOWER"'"|' ./libs/portable/src/bin_reader.rs
+            sed -i 's|"rustdesk"\.encode|"'"$APPNAME_LOWER"'".encode|g' ./libs/portable/generate.py
+            echo "Portable identifier updated ($APPNAME_LOWER = 8 bytes, OK)"
+          else
+            echo "WARNING: Skipping portable identifier - $APPNAME_LOWER is ${#APPNAME_LOWER} bytes, need 8"
+          fi
+
+          # 6. Fix RuntimeBroker exe references
+          sed -i 's|RuntimeBroker_rustdesk\.exe|RuntimeBroker_'"$APPNAME_LOWER"'.exe|g' ./src/privacy_mode/win_topmost_window.rs
+          sed -i 's|RuntimeBroker_rustdesk\.exe|RuntimeBroker_'"$APPNAME_LOWER"'.exe|g' ./libs/portable/src/main.rs
+          sed -i 's|RuntimeBroker_rustdesk\.exe|RuntimeBroker_'"$APPNAME_LOWER"'.exe|g' ./res/msi/CustomActions/CustomActions.cpp
+          sed -i 's|RuntimeBroker_rustdesk\.exe|RuntimeBroker_'"$APPNAME_LOWER"'.exe|g' ./res/msi/Package/Components/RustDesk.wxs
+
+          echo "=== Deep rebrand complete ==="
+
       - name: allow custom.txt
         uses: nick-fields/retry@v3
         with:
@@ -606,7 +649,18 @@ jobs:
         with:
           name: topmostwindow-artifacts
           path: "./rustdesk"
-      
+
+      - name: Rename RuntimeBroker for rebrand
+        if: env.appname != 'rustdesk' && env.appname != 'RustDesk'
+        continue-on-error: true
+        shell: bash
+        run: |
+          APPNAME_LOWER=$(echo "${{ env.appname }}" | tr '[:upper:]' '[:lower:]')
+          if [ -f "./rustdesk/RuntimeBroker_rustdesk.exe" ]; then
+            mv "./rustdesk/RuntimeBroker_rustdesk.exe" "./rustdesk/RuntimeBroker_${APPNAME_LOWER}.exe"
+            echo "RuntimeBroker renamed to RuntimeBroker_${APPNAME_LOWER}.exe"
+          fi
+
       - name: zip dlls
         continue-on-error: true
         shell: pwsh
