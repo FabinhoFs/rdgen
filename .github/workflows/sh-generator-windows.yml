@@ -282,14 +282,9 @@ jobs:
           # 4. Fix Flutter tabbar hardcoded app name
           sed -i 's|"RustDesk"|"'"$APPNAME"'"|' ./flutter/lib/desktop/widgets/tabbar_widget.dart
 
-          # 5. Fix portable packer binary identifier (must match byte length)
-          if [ ${#APPNAME_LOWER} -eq 8 ]; then
-            sed -i 's|b"rustdesk"|b"'"$APPNAME_LOWER"'"|' ./libs/portable/src/bin_reader.rs
-            sed -i 's|"rustdesk"\.encode|"'"$APPNAME_LOWER"'".encode|g' ./libs/portable/generate.py
-            echo "Portable identifier updated ($APPNAME_LOWER = 8 bytes, OK)"
-          else
-            echo "WARNING: Skipping portable identifier - $APPNAME_LOWER is ${#APPNAME_LOWER} bytes, need 8"
-          fi
+          # 5. Portable packer binary identifier - NOT changed
+          # The identifier b"rustdesk" in bin_reader.rs is an internal binary marker.
+          # Changing it causes the packer to crash (finds wrong occurrence in code section).
 
           # 6. Fix RuntimeBroker exe references
           sed -i 's|RuntimeBroker_rustdesk\.exe|RuntimeBroker_'"$APPNAME_LOWER"'.exe|g' ./src/privacy_mode/win_topmost_window.rs
